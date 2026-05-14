@@ -1,10 +1,13 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -45,10 +48,27 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	mediaType := header.Header.Get("Content-Type")
-	byteSlice, err := io.ReadAll(file)
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to read bytes from file", err)
+		respondWithError(w, http.StatusBadRequest, "No Content-Type", err)
+		return
+	}
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusNotAcceptable, "only .jpeg or .png allowed", err)
+		return
+	}
+
+	extension := strings.Split(mediaType, "/")[1]
+	videoFileName := videoID.String() + "." + extension
+	newVideoPath := filepath.Join(cfg.assetsRoot, videoFileName)
+	videoFile, err := os.Create(newVideoPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong saving the file to disk", err)
+		return
+	}
+	_, err = io.Copy(videoFile, file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong copying file content to disk", err)
 		return
 	}
 
@@ -63,9 +83,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	encodedString := base64.StdEncoding.EncodeToString(byteSlice)
-	dataURL := fmt.Sprintf("data:%s;base64,%v", mediaType, encodedString)
-	videoMetadata.ThumbnailURL = &dataURL
+	assetURL := fmt.Sprintf("http://localhost:%v/assets/%s", cfg.port, videoFileName)
+	videoMetadata.ThumbnailURL = &assetURL
 
 	if err := cfg.db.UpdateVideo(videoMetadata); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Failed to update video in db", err)
